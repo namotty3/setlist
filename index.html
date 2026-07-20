@@ -338,6 +338,11 @@
       <input type="file" id="photoInput" accept="image/*">
       <div class="photo-drop-label">📷 タップして写真を選択</div>
     </div>
+    <div id="photoZoomRow" style="display:none;margin-top:12px;align-items:center;gap:10px;">
+      <span style="font-size:11px;color:var(--text-dim);white-space:nowrap;min-width:36px;">ズーム</span>
+      <input type="range" id="photoZoom" min="50" max="200" value="100" step="5" oninput="onZoomChange(this.value)" style="flex:1;">
+      <span id="photoZoomVal" style="font-size:11px;color:var(--text-dim);min-width:40px;text-align:right;">100%</span>
+    </div>
   </div>
 
   <!-- INFO -->
@@ -403,7 +408,9 @@
         5. デプロイ → 表示されたURLをこのフォームに貼り付ける
         <pre class="gas-help-pre">function doPost(e) {
   try {
-    var d = JSON.parse(e.postData.contents);
+    var raw = e.postData.contents;
+    // text/plain フォーム送信では末尾に "=" が付くため除去する
+    var d = JSON.parse(raw.charAt(raw.length - 1) === '=' ? raw.slice(0, -1) : raw);
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     var name = String(d.year);
     var sh = ss.getSheetByName(name);
@@ -418,15 +425,31 @@
       // フィルター設定
       sh.getRange(1, 1, sh.getMaxRows(), 6).createFilter();
     }
-    // 日付順に挿入する行を探す
-    var newDate = new Date(d.rows[0].date.replace(/\//g, '-'));
+    // 重複チェック（同じ日付・会場・バンド名がすでに存在する場合はスキップ）
+    var newDateStr = d.rows[0].date;
+    var newVenue   = d.rows[0].venue;
+    var newBand    = d.rows[0].band;
     var lastRow = sh.getLastRow();
+    if (lastRow > 1) {
+      var existing = sh.getRange(2, 1, lastRow - 1, 3).getValues();
+      for (var i = 0; i < existing.length; i++) {
+        if (String(existing[i][0]) === newDateStr &&
+            String(existing[i][1]) === newVenue &&
+            String(existing[i][2]) === newBand) {
+          return ContentService
+            .createTextOutput(JSON.stringify({ ok: false, skipped: true, reason: '同じ日付・会場・バンド名のデータがすでに存在します' }))
+            .setMimeType(ContentService.MimeType.JSON);
+        }
+      }
+    }
+    // 日付順に挿入する行を探す
+    var newDate = new Date(newDateStr.replace(/\//g, '-'));
     var insertAt = lastRow + 1; // デフォルトは末尾
     if (lastRow > 1) {
       var dates = sh.getRange(2, 1, lastRow - 1, 1).getValues();
       for (var i = 0; i < dates.length; i++) {
-        var existing = new Date(String(dates[i][0]).replace(/\//g, '-'));
-        if (existing > newDate) {
+        var existingDate = new Date(String(dates[i][0]).replace(/\//g, '-'));
+        if (existingDate > newDate) {
           insertAt = i + 2; // ヘッダー分+1、0-indexedから1-indexedへ
           break;
         }
@@ -483,8 +506,12 @@
       </div>
     </div>
     <div class="dl-row">
+      <button class="dl-btn primary" onclick="downloadCardPng()">📸 PNG保存</button>
+      <button class="dl-btn primary" onclick="copyCardImage()">🖼️ 画像コピー</button>
+    </div>
+    <div class="dl-row" style="margin-top:10px;">
       <button class="dl-btn" onclick="downloadHTML()">📄 HTMLダウンロード</button>
-      <button class="dl-btn primary" onclick="copyText()">📋 X投稿用にコピー</button>
+      <button class="dl-btn" onclick="copyText()">📋 Xテキストコピー</button>
     </div>
     <button class="dl-btn" id="sheetExportBtn" style="width:100%;margin-top:10px;display:none;" onclick="exportToSheets()">📊 スプレッドシートに記録する</button>
   </div>
@@ -519,7 +546,7 @@ const BAND_CONFIG = {
     hasArtist: false,
     showBandInPhoto: false,
     logoFile: 'logo/Remind.png',
-    songs: ['普通','指切り','スピカ','Step by Step','moon','Re:mind','コーヒー','ハーフ&ハーフ','なんとかなんとなく','つよがりのうた','ラーメン'],
+    songs: ['普通','指切り','スピカ','Step by Step','moon','Re:mind','コーヒー','ハーフ&ハーフ','なんとかなんとなく','つよがりのうた','天津爛々～一杯入魂～'],
     cardTheme: {
       bg: '#111114', sectionBg: '#17171b',
       border: 'rgba(160,160,160,0.12)',
@@ -558,9 +585,9 @@ let generatedHTML = '';
 let trackCount = 0;
 const logoCache = { doppel: null, remind: null };
 const bandState = {
-  doppel: { tracks: [], bandName: '狂想ドッペル', liveName: '', liveDate: '', venue: '', hashtags: '#狂想ドッペル #感情音楽', logoOpacity: 70, logoSize: 64, logoPosition: 'right' },
-  remind: { tracks: [], bandName: 'Re:mind',  liveName: '', liveDate: '', venue: '', hashtags: '#Remind', logoOpacity: 70, logoSize: 64, logoPosition: 'right' },
-  other:  { tracks: [], bandName: '',          liveName: '', liveDate: '', venue: '', hashtags: '', color: '#e63b6f', template: 'vivid' },
+  doppel: { tracks: [], bandName: '狂想ドッペル', liveName: '', liveDate: '', venue: '', hashtags: '#狂想ドッペル #感情音楽', logoOpacity: 70, logoSize: 64, logoPosition: 'right', photoX: 50, photoY: 30, photoZoom: 100 },
+  remind: { tracks: [], bandName: 'Re:mind',  liveName: '', liveDate: '', venue: '', hashtags: '#Remind', logoOpacity: 70, logoSize: 64, logoPosition: 'right', photoX: 50, photoY: 30, photoZoom: 100 },
+  other:  { tracks: [], bandName: '',          liveName: '', liveDate: '', venue: '', hashtags: '', color: '#e63b6f', template: 'vivid', photoX: 50, photoY: 30, photoZoom: 100 },
 };
 
 // ---- Logo Loading (embedded base64) ----
@@ -640,6 +667,8 @@ function saveCurrentFormState() {
   if (currentBand === 'other') {
     s.template = document.querySelector('.tmpl-btn.active')?.dataset.tmpl || 'vivid';
   }
+  const zoomEl = document.getElementById('photoZoom');
+  if (zoomEl) s.photoZoom = parseInt(zoomEl.value);
 }
 function restoreFormState() {
   const s = bandState[currentBand];
@@ -658,6 +687,9 @@ function restoreFormState() {
   if (currentBand === 'other' && s.template) {
     onTemplateChange(s.template);
   }
+  const zoom = s.photoZoom ?? 100;
+  document.getElementById('photoZoom').value = zoom;
+  document.getElementById('photoZoomVal').textContent = zoom + '%';
   const container = document.getElementById('tracks');
   container.innerHTML = '';
   trackCount = 0;
@@ -709,6 +741,44 @@ function onPositionChange(pos) {
     logo.style.right = pos === 'right' ? '16px' : '';
   }
 }
+function onZoomChange(val) {
+  document.getElementById('photoZoomVal').textContent = val + '%';
+  bandState[currentBand].photoZoom = parseInt(val);
+  const im = document.getElementById('previewFrame').contentDocument?.getElementById('card-photo');
+  if (im) {
+    const sc = val / 100;
+    const origin = im.style.objectPosition || '50% 30%';
+    im.style.transform = `scale(${sc})`;
+    im.style.transformOrigin = origin;
+  }
+}
+function photoDragScript(px, py) {
+  return '<script>(function(){'
+    + 'var w=document.getElementById("photo-wrap");'
+    + 'var im=document.getElementById("card-photo");'
+    + 'if(!w||!im)return;'
+    + 'var px=' + px + ',py=' + py + ';'
+    + 'w.style.cursor="grab";'
+    + 'w.addEventListener("pointerdown",function(e){'
+    + '  w.setPointerCapture(e.pointerId);'
+    + '  w.style.cursor="grabbing";'
+    + '  var sx=e.clientX,sy=e.clientY;'
+    + '  function mv(e){'
+    + '    px=Math.max(0,Math.min(100,px-(e.clientX-sx)/w.clientWidth*100));'
+    + '    py=Math.max(0,Math.min(100,py-(e.clientY-sy)/w.clientHeight*100));'
+    + '    sx=e.clientX;sy=e.clientY;'
+    + '    im.style.objectPosition=px+"% "+py+"%";'
+    + '    im.style.transformOrigin=px+"% "+py+"%";'
+    + '    try{var p=window.parent;p.bandState[p.currentBand].photoX=px;p.bandState[p.currentBand].photoY=py;}catch(ex){}'
+    + '  }'
+    + '  w.addEventListener("pointermove",mv);'
+    + '  w.addEventListener("pointerup",function(){'
+    + '    w.style.cursor="grab";'
+    + '    w.removeEventListener("pointermove",mv);'
+    + '  },{once:true});'
+    + '});'
+    + '})()</s' + 'cript>';
+}
 function onTemplateChange(tmpl) {
   bandState.other.template = tmpl;
   document.querySelectorAll('.tmpl-btn').forEach(b =>
@@ -733,6 +803,7 @@ function setupPhotoInput() {
       const drop = document.getElementById('photoDrop');
       drop.innerHTML = '';
       drop.appendChild(img);
+      document.getElementById('photoZoomRow').style.display = 'flex';
       const lbl = document.createElement('div');
       lbl.className = 'photo-drop-label';
       lbl.textContent = '📷 タップして変更';
@@ -852,9 +923,12 @@ function getTracks() {
 }
 
 // ---- Card Helpers ----
-function photoImgHtml(b64, mime) {
+function photoImgHtml(b64, mime, px, py, zoom) {
   if (!b64) return `<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,0.1);font-family:'Bebas Neue',sans-serif;font-size:16px;letter-spacing:.2em;">NO PHOTO</div>`;
-  return `<img src="data:${mime};base64,${b64}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:center 30%;">`;
+  const pos = `${px ?? 50}% ${py ?? 30}%`;
+  const sc = (zoom ?? 100) / 100;
+  const tf = sc === 1 ? '' : `transform:scale(${sc});transform-origin:${pos};`;
+  return `<img id="card-photo" src="data:${mime};base64,${b64}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:${pos};${tf}cursor:grab;">`;
 }
 function logoImgHtml(url, opacity, size, pos) {
   if (!url) return '';
@@ -865,8 +939,8 @@ const CARD_FONTS = `<link href="https://fonts.googleapis.com/css2?family=Noto+Sa
 
 // ---- 狂想ドッペル: Dark × Noise × Heavy ----
 function buildCardDoppel(p) {
-  const { band, live, displayDate, venue, tags, tracks, photo, photoMime: mime, logoDataUrl, logoOpacity, logoSize, logoPosition } = p;
-  const ph = photoImgHtml(photo, mime);
+  const { band, live, displayDate, venue, tags, tracks, photo, photoMime: mime, logoDataUrl, logoOpacity, logoSize, logoPosition, photoX, photoY, photoZoom } = p;
+  const ph = photoImgHtml(photo, mime, photoX, photoY, photoZoom);
   const lh = logoImgHtml(logoDataUrl, logoOpacity, logoSize, logoPosition);
   const meta = [displayDate, venue].filter(Boolean).map(esc).join('  ');
   const rows = tracks.map(t => `
@@ -878,7 +952,7 @@ function buildCardDoppel(p) {
   return `<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8">${CARD_FONTS}</head>
 <body style="margin:0;padding:20px;background:#111;display:flex;justify-content:center;font-family:'Noto Sans JP',sans-serif;">
 <div style="width:600px;background:#000;border-radius:12px;overflow:hidden;">
-  <div style="position:relative;height:340px;overflow:hidden;background:#000;">
+  <div id="photo-wrap" style="position:relative;height:340px;overflow:hidden;background:#000;">
     ${ph}
     <div style="position:absolute;inset:0;background:linear-gradient(to bottom,rgba(0,0,0,0.2) 0%,rgba(0,0,0,0.6) 60%,rgba(0,0,0,0.95) 100%);"></div>
     <svg style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;" viewBox="0 0 600 340" preserveAspectRatio="none">
@@ -909,8 +983,8 @@ function buildCardDoppel(p) {
 
 // ---- Re:mind: Minimal × Line Art ----
 function buildCardRemind(p) {
-  const { band, live, displayDate, venue, tags, tracks, photo, photoMime: mime, logoDataUrl, logoOpacity, logoSize, logoPosition } = p;
-  const ph = photoImgHtml(photo, mime);
+  const { band, live, displayDate, venue, tags, tracks, photo, photoMime: mime, logoDataUrl, logoOpacity, logoSize, logoPosition, photoX, photoY, photoZoom } = p;
+  const ph = photoImgHtml(photo, mime, photoX, photoY, photoZoom);
   const lh = logoImgHtml(logoDataUrl, logoOpacity, logoSize, logoPosition);
   const meta = [displayDate, venue].filter(Boolean).map(esc).join('  ·  ');
   const rows = tracks.map(t => `
@@ -921,7 +995,7 @@ function buildCardRemind(p) {
   return `<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8">${CARD_FONTS}</head>
 <body style="margin:0;padding:20px;background:#1a1a1e;display:flex;justify-content:center;font-family:'Noto Sans JP',sans-serif;">
 <div style="width:600px;background:#111114;border-radius:12px;overflow:hidden;">
-  <div style="position:relative;height:320px;overflow:hidden;background:#111114;">
+  <div id="photo-wrap" style="position:relative;height:320px;overflow:hidden;background:#111114;">
     ${ph}
     <div style="position:absolute;inset:0;background:radial-gradient(ellipse at center,transparent 30%,rgba(10,10,12,0.7) 100%);"></div>
     <div style="position:absolute;inset:0;background:linear-gradient(to bottom,transparent 40%,rgba(17,17,20,0.92) 100%);"></div>
@@ -962,8 +1036,8 @@ function buildCardRemind(p) {
 
 // ---- その他 VIVID: Accent stripe + bold ----
 function buildCardVivid(p) {
-  const { band, live, displayDate, venue, tags, tracks, photo, photoMime: mime, accent, accentText } = p;
-  const ph = photoImgHtml(photo, mime);
+  const { band, live, displayDate, venue, tags, tracks, photo, photoMime: mime, accent, accentText, photoX, photoY, photoZoom } = p;
+  const ph = photoImgHtml(photo, mime, photoX, photoY, photoZoom);
   const meta = [displayDate, venue].filter(Boolean).map(esc).join(' · ');
   const rows = tracks.map(t => `
     <div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.07);">
@@ -977,7 +1051,7 @@ function buildCardVivid(p) {
 <div style="width:600px;background:#0a0a0a;border-radius:12px;overflow:hidden;display:flex;">
   <div style="width:6px;background:${accent};flex-shrink:0;"></div>
   <div style="flex:1;min-width:0;">
-    <div style="position:relative;height:340px;overflow:hidden;background:#0a0a0a;">
+    <div id="photo-wrap" style="position:relative;height:340px;overflow:hidden;background:#0a0a0a;">
       ${ph}
       <div style="position:absolute;inset:0;background:linear-gradient(to bottom,transparent 30%,rgba(0,0,0,0.88) 100%);"></div>
       <div style="position:absolute;bottom:24px;left:20px;right:20px;">
@@ -1002,8 +1076,8 @@ function buildCardVivid(p) {
 
 // ---- その他 CINEMA: Large photo + corner brackets ----
 function buildCardCinema(p) {
-  const { band, live, displayDate, venue, tags, tracks, photo, photoMime: mime, accent, accentText } = p;
-  const ph = photoImgHtml(photo, mime);
+  const { band, live, displayDate, venue, tags, tracks, photo, photoMime: mime, accent, accentText, photoX, photoY, photoZoom } = p;
+  const ph = photoImgHtml(photo, mime, photoX, photoY, photoZoom);
   const meta = [displayDate, venue].filter(Boolean).map(esc).join(' · ');
   const rows = tracks.map(t => `
     <div style="display:flex;align-items:center;gap:12px;padding:9px 0;border-bottom:1px solid rgba(255,255,255,0.06);">
@@ -1014,7 +1088,7 @@ function buildCardCinema(p) {
   return `<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8">${CARD_FONTS}</head>
 <body style="margin:0;padding:20px;background:#141414;display:flex;justify-content:center;font-family:'Noto Sans JP',sans-serif;">
 <div style="width:600px;background:#0c0c0c;border-radius:12px;overflow:hidden;">
-  <div style="position:relative;height:420px;overflow:hidden;background:#0c0c0c;">
+  <div id="photo-wrap" style="position:relative;height:420px;overflow:hidden;background:#0c0c0c;">
     ${ph}
     <div style="position:absolute;inset:0;background:radial-gradient(ellipse at 50% 30%,transparent 20%,rgba(0,0,0,0.5) 60%,rgba(0,0,0,0.9) 100%);"></div>
     <div style="position:absolute;inset:0;background:linear-gradient(to bottom,transparent 45%,rgba(0,0,0,0.95) 100%);"></div>
@@ -1047,8 +1121,8 @@ function buildCardCinema(p) {
 
 // ---- その他 POSTER: Accent header strip ----
 function buildCardPoster(p) {
-  const { band, live, displayDate, venue, tags, tracks, photo, photoMime: mime, accent, accentText } = p;
-  const ph = photoImgHtml(photo, mime);
+  const { band, live, displayDate, venue, tags, tracks, photo, photoMime: mime, accent, accentText, photoX, photoY, photoZoom } = p;
+  const ph = photoImgHtml(photo, mime, photoX, photoY, photoZoom);
   const rows = tracks.map(t => `
     <div style="display:grid;grid-template-columns:28px 1fr auto;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.07);">
       <span style="font-family:'Bebas Neue',sans-serif;font-size:20px;color:rgba(255,255,255,0.2);line-height:1;">${String(t.n).padStart(2,'0')}</span>
@@ -1062,7 +1136,7 @@ function buildCardPoster(p) {
     <span style="font-family:'Bebas Neue',sans-serif;font-size:18px;color:${accentText};letter-spacing:.3em;">SET LIST</span>
     <span style="font-size:10px;font-weight:700;color:${accentText};opacity:.75;letter-spacing:.1em;">${displayDate || ''}</span>
   </div>
-  <div style="position:relative;height:320px;overflow:hidden;background:#0a0a0a;">
+  <div id="photo-wrap" style="position:relative;height:320px;overflow:hidden;background:#0a0a0a;">
     ${ph}
     <div style="position:absolute;inset:0;background:linear-gradient(to bottom,transparent 35%,rgba(0,0,0,0.88) 100%);"></div>
     <div style="position:absolute;bottom:22px;left:24px;right:24px;">
@@ -1083,12 +1157,17 @@ function buildCardPoster(p) {
 
 // ---- Card Dispatcher ----
 function buildCard(p) {
-  if (p.band_key === 'doppel') return buildCardDoppel(p);
-  if (p.band_key === 'remind') return buildCardRemind(p);
-  const tmpl = bandState.other.template || 'vivid';
-  if (tmpl === 'cinema') return buildCardCinema(p);
-  if (tmpl === 'poster') return buildCardPoster(p);
-  return buildCardVivid(p);
+  let html;
+  if (p.band_key === 'doppel') html = buildCardDoppel(p);
+  else if (p.band_key === 'remind') html = buildCardRemind(p);
+  else {
+    const tmpl = bandState.other.template || 'vivid';
+    if (tmpl === 'cinema') html = buildCardCinema(p);
+    else if (tmpl === 'poster') html = buildCardPoster(p);
+    else html = buildCardVivid(p);
+  }
+  const script = photoDragScript(p.photoX ?? 50, p.photoY ?? 30);
+  return html.replace('</body></html>', script + '</body></html>');
 }
 
 // ---- Copy Artist ----
@@ -1141,12 +1220,38 @@ async function exportToSheets() {
     original: isOriginal ? '○' : '',
   }));
   try {
-    await fetch(url, { method: 'POST', mode: 'no-cors', body: JSON.stringify({ year, rows }) });
+    await postViaIframe(url, JSON.stringify({ year, rows }));
     showToast('✅ スプレッドシートに記録しました！');
   } catch (err) {
     showToast('❌ 記録に失敗しました');
     console.error(err);
   }
+}
+function postViaIframe(url, jsonPayload) {
+  return new Promise((resolve) => {
+    const id = 'gasf' + Date.now();
+    const iframe = document.createElement('iframe');
+    iframe.name = id;
+    iframe.style.cssText = 'position:fixed;width:1px;height:1px;opacity:0;pointer-events:none;left:-9999px;';
+    document.body.appendChild(iframe);
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = url;
+    form.target = id;
+    form.enctype = 'text/plain';
+    form.style.display = 'none';
+    const input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = jsonPayload;
+    input.value = '';
+    form.appendChild(input);
+    document.body.appendChild(form);
+    const cleanup = () => { try { document.body.removeChild(iframe); } catch {} };
+    iframe.onload = () => { cleanup(); resolve(); };
+    setTimeout(() => { cleanup(); resolve(); }, 8000);
+    form.submit();
+    setTimeout(() => { try { document.body.removeChild(form); } catch {} }, 200);
+  });
 }
 
 // ---- Generate ----
@@ -1167,6 +1272,9 @@ function generate() {
     band_key: currentBand,
     band, live, displayDate, venue, tags, tracks,
     photo: photoBase64, photoMime,
+    photoX: st.photoX ?? 50,
+    photoY: st.photoY ?? 30,
+    photoZoom: st.photoZoom ?? 100,
     logoDataUrl: logoCache[currentBand] || null,
     logoOpacity: st.logoOpacity ?? 70,
     logoSize:    st.logoSize    ?? 64,
@@ -1179,6 +1287,12 @@ function generate() {
 
   const frame = document.getElementById('previewFrame');
   frame.srcdoc = generatedHTML;
+  frame.onload = () => {
+    try {
+      const h = frame.contentDocument.body.scrollHeight;
+      if (h > 0) frame.style.height = (h + 2) + 'px';
+    } catch(e) {}
+  };
   document.getElementById('logoAdjust').style.display = BAND_CONFIG[currentBand].logoFile ? '' : 'none';
   document.getElementById('result').style.display = 'block';
   document.getElementById('result').scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -1189,6 +1303,66 @@ function generate() {
 }
 
 // ---- Download / Copy ----
+// ---- PNG Save / Copy ----
+function loadHtml2Canvas() {
+  if (window.html2canvas) return Promise.resolve();
+  return new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = 'https://html2canvas.hertzen.com/dist/html2canvas.min.js';
+    s.onload = res; s.onerror = rej;
+    document.head.appendChild(s);
+  });
+}
+async function getCardCanvas() {
+  const iframe = document.getElementById('previewFrame');
+  const iDoc = iframe.contentDocument;
+  if (!iDoc || !iDoc.body.firstElementChild) throw new Error('no card');
+  await loadHtml2Canvas();
+  const card = iDoc.body.firstElementChild;
+  const cw = card.offsetWidth;
+  const ch = card.scrollHeight;
+  return html2canvas(card, {
+    scale: 2, useCORS: true, allowTaint: true,
+    backgroundColor: null, logging: false,
+    width: cw, height: ch,
+    windowWidth: iframe.clientWidth,
+    windowHeight: ch + 40,
+  });
+}
+async function downloadCardPng() {
+  showToast('📸 画像を生成中...');
+  try {
+    const canvas = await getCardCanvas();
+    const band = document.getElementById('bandName').value || BAND_CONFIG[currentBand].defaultBandName || 'card';
+    const date = document.getElementById('liveDate').value || '';
+    const a = document.createElement('a');
+    a.download = (band + '_' + date + '_card.png').replace(/[\/\\:*?"<>|]/g, '_');
+    a.href = canvas.toDataURL('image/png');
+    a.click();
+    showToast('✅ PNGを保存しました');
+  } catch (err) {
+    showToast('❌ 画像生成に失敗しました');
+    console.error(err);
+  }
+}
+async function copyCardImage() {
+  showToast('🖼️ 画像を生成中...');
+  try {
+    const canvas = await getCardCanvas();
+    canvas.toBlob(async blob => {
+      try {
+        await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+        showToast('✅ 画像をクリップボードにコピーしました');
+      } catch {
+        showToast('❌ このブラウザはコピー非対応です（PNG保存をお試しください）');
+      }
+    }, 'image/png');
+  } catch (err) {
+    showToast('❌ 画像生成に失敗しました');
+    console.error(err);
+  }
+}
+
 function downloadHTML() {
   if (!generatedHTML) return;
   const band = document.getElementById('bandName').value || BAND_CONFIG[currentBand].defaultBandName || 'setlist';

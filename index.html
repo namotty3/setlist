@@ -408,9 +408,10 @@
         5. デプロイ → 表示されたURLをこのフォームに貼り付ける
         <pre class="gas-help-pre">function doPost(e) {
   try {
+    // text/plain 形式: "jsondata={JSON}\r\n" → "=" 以降を取り出してパース
     var raw = e.postData.contents;
-    // text/plain フォーム送信では末尾に "=" が付くため除去する
-    var d = JSON.parse(raw.charAt(raw.length - 1) === '=' ? raw.slice(0, -1) : raw);
+    var eqIdx = raw.indexOf('=');
+    var d = JSON.parse(eqIdx >= 0 ? raw.slice(eqIdx + 1).trim() : raw.trim());
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     var name = String(d.year);
     var sh = ss.getSheetByName(name);
@@ -1245,8 +1246,8 @@ function postViaIframe(url, jsonPayload) {
     form.style.display = 'none';
     const input = document.createElement('input');
     input.type = 'hidden';
-    input.name = jsonPayload;
-    input.value = '';
+    input.name = 'jsondata';
+    input.value = jsonPayload;
     form.appendChild(input);
     document.body.appendChild(form);
     const cleanup = () => { try { document.body.removeChild(iframe); } catch {} };
